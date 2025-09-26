@@ -1,0 +1,11 @@
+*.exe
+*.dll
+*.so
+*.dylib
+.vscode/
+.idea/
+*.swp
+*.swo
+tmp/
+temp/
+*.tmp
