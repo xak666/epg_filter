@@ -8,6 +8,13 @@ import (
 	"time"
 )
 
+// Структура для хранения информации о программе
+type Programme struct {
+	Start string
+	Stop  string
+	Title string
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Usage: ./epg_filter <input_xml> [\"channel1,channel2\"] [output_xml]")
@@ -190,7 +197,24 @@ func filterXML(inputFile, outputFile, channelList string) error {
 	programmesFound := 0
 	lineCount := 0
 
-	// Обрабатываем файл построчно
+	// Определяем диапазон дат (вчера, сегодня, завтра)
+	now := time.Now()
+	yesterday := now.AddDate(0, 0, -1).Format("20060102")
+	today := now.Format("20060102")
+	tomorrow := now.AddDate(0, 0, 1).Format("20060102")
+	
+	validDates := map[string]bool{
+		yesterday: true,
+		today:     true,
+		tomorrow:  true,
+	}
+	
+	fmt.Printf("Filtering dates: %s, %s, %s\n", yesterday, today, tomorrow)
+
+	// Структура для хранения программ по каналам
+	channelProgrammes := make(map[string][]Programme)
+
+	// Первый проход: собираем все программы для нужных каналов за нужные даты
 	for scanner.Scan() {
 		line := scanner.Text()
 		lineCount++
@@ -213,18 +237,40 @@ func filterXML(inputFile, outputFile, channelList string) error {
 		if strings.HasPrefix(trimmed, "<programme") {
 			channel := extractChannel(trimmed)
 			if channel != "" && channelMap[channel] {
-				// Создаем упрощенный programme только с title
-				simpleProgramme := createSimpleProgramme(scanner, trimmed)
-				if simpleProgramme != "" {
-					writer.WriteString(simpleProgramme + "\n")
-					programmesFound++
-					if programmesFound%1000 == 0 {
-						fmt.Printf("Processed %d programmes...\n", programmesFound)
+				start := getAttribute(trimmed, "start")
+				// Проверяем дату программы
+				if len(start) >= 8 {
+					date := start[:8]
+					if validDates[date] {
+						programme := extractProgramme(scanner, trimmed)
+						if programme.Start != "" && programme.Stop != "" {
+							channelProgrammes[channel] = append(channelProgrammes[channel], programme)
+						}
 					}
 				}
 			}
 			continue
 		}
+	}
+
+	// Второй проход: сортируем программы по времени и заполняем разрывы
+	for channel, programmes := range channelProgrammes {
+		// Сортируем программы по времени начала
+		sortedProgrammes := sortProgrammesByTime(programmes)
+		
+		// Заполняем временные разрывы
+		filledProgrammes := fillTimeGaps(sortedProgrammes)
+		
+		// Записываем программы в файл
+		for _, prog := range filledProgrammes {
+			simpleProgramme := fmt.Sprintf("<programme start=\"%s\" stop=\"%s\" channel=\"%s\">\n<title>%s</title>\n</programme>", 
+				prog.Start, prog.Stop, channel, escapeXML(prog.Title))
+			writer.WriteString(simpleProgramme + "\n")
+			programmesFound++
+		}
+		
+		fmt.Printf("Channel %s: %d programmes -> %d after gap filling\n", 
+			channel, len(programmes), len(filledProgrammes))
 	}
 
 	writer.WriteString("</tv>\n")
@@ -241,16 +287,122 @@ func filterXML(inputFile, outputFile, channelList string) error {
 		fmt.Printf("Success! Output file: %s\n", outputFile)
 	}
 	
-	return scanner.Err()
+	return nil
+}
+
+func extractProgramme(scanner *bufio.Scanner, firstLine string) Programme {
+	start := getAttribute(firstLine, "start")
+	stop := getAttribute(firstLine, "stop")
+	title := "No title"
+	
+	// Ищем title в следующих строках
+	linesToRead := 10
+	
+	for i := 0; i < linesToRead; i++ {
+		if !scanner.Scan() {
+			break
+		}
+		line := scanner.Text()
+		
+		if strings.Contains(line, "<title>") {
+			if foundTitle := extractTitleFromLine(line); foundTitle != "" {
+				title = foundTitle
+			}
+		}
+		
+		if strings.Contains(line, "</programme>") {
+			break
+		}
+	}
+	
+	return Programme{
+		Start: start,
+		Stop:  stop,
+		Title: title,
+	}
+}
+
+func sortProgrammesByTime(programmes []Programme) []Programme {
+	if len(programmes) <= 1 {
+		return programmes
+	}
+	
+	// Простая сортировка пузырьком
+	for i := 0; i < len(programmes)-1; i++ {
+		for j := i + 1; j < len(programmes); j++ {
+			if programmes[i].Start > programmes[j].Start {
+				programmes[i], programmes[j] = programmes[j], programmes[i]
+			}
+		}
+	}
+	return programmes
+}
+
+func fillTimeGaps(programmes []Programme) []Programme {
+	if len(programmes) == 0 {
+		return programmes
+	}
+	
+	var result []Programme
+	
+	for i := 0; i < len(programmes); i++ {
+		current := programmes[i]
+		
+		// Добавляем текущую программу
+		result = append(result, current)
+		
+		// Проверяем разрыв до следующей программы
+		if i < len(programmes)-1 {
+			next := programmes[i+1]
+			
+			currentEnd, err1 := parseTime(current.Stop)
+			nextStart, err2 := parseTime(next.Start)
+			
+			if err1 == nil && err2 == nil {
+				// Если есть разрыв более 1 минуты
+				gap := nextStart.Sub(currentEnd)
+				if gap > time.Minute {
+					// Создаем запись "Реклама" для заполнения разрыва
+					adStart := formatTime(currentEnd)
+					adStop := formatTime(nextStart)
+					
+					adProgramme := Programme{
+						Start: adStart,
+						Stop:  adStop,
+						Title: "Реклама",
+					}
+					result = append(result, adProgramme)
+				}
+			}
+		}
+	}
+	
+	return result
+}
+
+func parseTime(timeStr string) (time.Time, error) {
+	if len(timeStr) >= 14 {
+		return time.Parse("20060102150405", timeStr[:14])
+	}
+	return time.Time{}, fmt.Errorf("invalid time format: %s", timeStr)
+}
+
+func formatTime(t time.Time) string {
+	return t.Format("20060102150405")
 }
 
 func readCompleteElement(scanner *bufio.Scanner, firstLine, elementType string) string {
-	block := firstLine + "\n"
+	block := firstLine
 	endTag := "</" + elementType + ">"
+	
+	// Если первая строка уже содержит закрывающий тег, возвращаем ее
+	if strings.Contains(firstLine, endTag) {
+		return block
+	}
 	
 	for scanner.Scan() {
 		line := scanner.Text()
-		block += line + "\n"
+		block += "\n" + line
 		if strings.Contains(line, endTag) {
 			break
 		}
@@ -268,48 +420,6 @@ func extractChannel(line string) string {
 		}
 	}
 	return ""
-}
-
-func createSimpleProgramme(scanner *bufio.Scanner, firstLine string) string {
-	start := getAttribute(firstLine, "start")
-	stop := getAttribute(firstLine, "stop")
-	channel := extractChannel(firstLine)
-	
-	if start == "" || stop == "" || channel == "" {
-		return ""
-	}
-	
-	// Ищем title в следующих строках
-	title := "No title"
-	linesToRead := 10 // Ограничим поиск title 10 строками
-	
-	// Сканируем следующие строки для поиска title
-	tempScanner := bufio.NewScanner(strings.NewReader(firstLine + "\n"))
-	
-	for i := 0; i < linesToRead; i++ {
-		if !scanner.Scan() {
-			break
-		}
-		line := scanner.Text()
-		tempScanner = bufio.NewScanner(strings.NewReader(tempScanner.Text() + "\n" + line))
-		
-		// Проверяем текущую строку на наличие title
-		if strings.Contains(line, "<title>") {
-			if foundTitle := extractTitleFromLine(line); foundTitle != "" {
-				title = foundTitle
-			}
-		}
-		
-		if strings.Contains(line, "</programme>") {
-			break
-		}
-	}
-	
-	// Экранируем специальные XML символы в title
-	title = escapeXML(title)
-	
-	return fmt.Sprintf("<programme start=\"%s\" stop=\"%s\" channel=\"%s\">\n<title>%s</title>\n</programme>", 
-		start, stop, channel, title)
 }
 
 func getAttribute(xml string, attr string) string {
