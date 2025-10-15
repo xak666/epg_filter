@@ -181,7 +181,7 @@ func filterXML(inputFile, outputFile, channelList string) error {
 	// Пишем XML декларацию и заголовок
 	writer.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	writer.WriteString(`<!DOCTYPE tv SYSTEM "xmltv.dtd">` + "\n")
-	writer.WriteString(`<tv generator-info-name="iptvx" generator-info-url="https://megasite.ru/">` + "\n")
+	writer.WriteString(`<tv generator-info-name="iptvx" generator-info-url="https://megalink.net.ru/">` + "\n")
 
 	// Открываем входной файл
 	file, err := os.Open(inputFile)
@@ -304,9 +304,11 @@ func extractProgramme(scanner *bufio.Scanner, firstLine string) Programme {
 		}
 		line := scanner.Text()
 		
-		if strings.Contains(line, "<title>") {
+		// Ищем тег title в любой форме (с атрибутами или без)
+		if strings.Contains(line, "<title") && strings.Contains(line, "</title>") {
 			if foundTitle := extractTitleFromLine(line); foundTitle != "" {
 				title = foundTitle
+				break // Нашли title, можно выходить
 			}
 		}
 		
@@ -434,15 +436,32 @@ func getAttribute(xml string, attr string) string {
 }
 
 func extractTitleFromLine(line string) string {
-	if idx := strings.Index(line, "<title>"); idx != -1 {
-		start := idx + 7
-		rest := line[start:]
-		if end := strings.Index(rest, "</title>"); end != -1 {
-			title := rest[:end]
-			return strings.TrimSpace(title)
-		}
+	// Ищем начало тега title (может быть с атрибутами)
+	startTag := "<title"
+	startIdx := strings.Index(line, startTag)
+	if startIdx == -1 {
+		return ""
 	}
-	return ""
+	
+	// Находим закрывающую скобку начала тега
+	startTagEnd := strings.Index(line[startIdx:], ">")
+	if startTagEnd == -1 {
+		return ""
+	}
+	
+	// Вычисляем позицию начала текста title
+	titleStart := startIdx + startTagEnd + 1
+	
+	// Ищем закрывающий тег
+	endTag := "</title>"
+	endIdx := strings.Index(line[titleStart:], endTag)
+	if endIdx == -1 {
+		return ""
+	}
+	
+	// Извлекаем текст title
+	title := line[titleStart:titleStart+endIdx]
+	return strings.TrimSpace(title)
 }
 
 func escapeXML(s string) string {
