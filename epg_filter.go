@@ -181,7 +181,7 @@ func filterXML(inputFile, outputFile, channelList string) error {
 	// Пишем XML декларацию и заголовок
 	writer.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	writer.WriteString(`<!DOCTYPE tv SYSTEM "xmltv.dtd">` + "\n")
-	writer.WriteString(`<tv generator-info-name="iptvx" generator-info-url="https://megalink.net.ru/">` + "\n")
+	writer.WriteString(`<tv generator-info-name="iptvx" generator-info-url="https://megasite.ru/">` + "\n")
 
 	// Открываем входной файл
 	file, err := os.Open(inputFile)
@@ -197,19 +197,26 @@ func filterXML(inputFile, outputFile, channelList string) error {
 	programmesFound := 0
 	lineCount := 0
 
-	// Определяем диапазон дат (вчера, сегодня, завтра)
+	// Определяем диапазон дат
 	now := time.Now()
-	yesterday := now.AddDate(0, 0, -1).Format("20060102")
-	today := now.Format("20060102")
-	tomorrow := now.AddDate(0, 0, 1).Format("20060102")
-	
-	validDates := map[string]bool{
-		yesterday: true,
-		today:     true,
-		tomorrow:  true,
+	daysBack := 1   // вчера
+	daysForward := 4 // сегодня + 4 дня вперед = всего 6 дней
+
+	validDates := make(map[string]bool)
+
+	// Добавляем дни назад
+	for i := -daysBack; i <= daysForward; i++ {
+    		date := now.AddDate(0, 0, i).Format("20060102")
+    		validDates[date] = true
 	}
-	
-	fmt.Printf("Filtering dates: %s, %s, %s\n", yesterday, today, tomorrow)
+
+	// Формируем строку для вывода
+	var dateList []string
+	for i := -daysBack; i <= daysForward; i++ {
+    		dateList = append(dateList, now.AddDate(0, 0, i).Format("20060102"))
+	}
+
+	fmt.Printf("Filtering dates: %s\n", strings.Join(dateList, ", "))
 
 	// Структура для хранения программ по каналам
 	channelProgrammes := make(map[string][]Programme)
@@ -316,7 +323,10 @@ func extractProgramme(scanner *bufio.Scanner, firstLine string) Programme {
 			break
 		}
 	}
-	
+
+	// УДАЛЯЕМ все XML/HTML entities вместо преобразования
+	title = removeXMLEntities(title)
+
 	return Programme{
 		Start: start,
 		Stop:  stop,
@@ -464,6 +474,29 @@ func extractTitleFromLine(line string) string {
 	return strings.TrimSpace(title)
 }
 
+func removeXMLEntities(s string) string {
+	// Удаляем XML/HTML entities
+	s = strings.ReplaceAll(s, "&amp;quot;", "")
+	s = strings.ReplaceAll(s, "&quot;", "")
+	s = strings.ReplaceAll(s, "&amp;amp;", "")
+	s = strings.ReplaceAll(s, "&amp;", "")
+	s = strings.ReplaceAll(s, "&amp;lt;", "")
+	s = strings.ReplaceAll(s, "&lt;", "")
+	s = strings.ReplaceAll(s, "&amp;gt;", "")
+	s = strings.ReplaceAll(s, "&gt;", "")
+	s = strings.ReplaceAll(s, "&amp;apos;", "")
+	s = strings.ReplaceAll(s, "&apos;", "")
+	
+	// Удаляем числовые entities
+	s = strings.ReplaceAll(s, "&#34;", "")
+	s = strings.ReplaceAll(s, "&#38;", "")
+	s = strings.ReplaceAll(s, "&#39;", "")
+	s = strings.ReplaceAll(s, "&#60;", "")
+	s = strings.ReplaceAll(s, "&#62;", "")
+	
+	return s
+}
+
 func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "&", "&amp;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
@@ -472,3 +505,5 @@ func escapeXML(s string) string {
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	return s
 }
+
+
